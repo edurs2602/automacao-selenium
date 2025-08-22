@@ -1,0 +1,7 @@
+SELENIUM_IMAGE=seleniarm/standalone-chromium:latest
+# SELENIUM_PLATFORM=linux/amd64
+SELENIUM_REMOTE_URL=http://selenium:4444/wd/hub
+
+DOWNLOAD_DIR=data/dom
+
+CHROME_HEADLESS=true

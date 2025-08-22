@@ -1,0 +1,20 @@
+services:
+  selenium:
+    image: ${SELENIUM_IMAGE:-seleniarm/standalone-chromium:latest}
+    platform: ${SELENIUM_PLATFORM:-}
+    shm_size: 2gb
+    ports:
+      - "4444:4444"
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      SELENIUM_REMOTE_URL: ${SELENIUM_REMOTE_URL:-http://selenium:4444/wd/hub}
+      DOWNLOAD_DIR: ${DOWNLOAD_DIR:-/app/data/dom}
+      CHROME_HEADLESS: "true"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      selenium:
+        condition: service_started
