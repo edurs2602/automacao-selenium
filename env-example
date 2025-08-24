@@ -6,7 +6,7 @@ POSTGRES_HOST=db
 POSTGRES_PORT=5432
 
 # Selenium / scraping
-# SELENIUM_PLATFORM=linux/amd64
+SELENIUM_PLATFORM=linux/amd64
 SELENIUM_IMAGE=seleniarm/standalone-chromium:latest
 SELENIUM_REMOTE_URL=http://selenium:4444/wd/hub
 DOWNLOAD_DIR=/data/dom
