@@ -29,6 +29,26 @@ def _list_pdfs(dirpath: Path) -> list[Path]:
     return sorted([p for p in dirpath.glob("*.pdf") if p.is_file()])
 
 
+def upload_for_competencia(comp: Competencia, download_root: Path | None = None) -> list[tuple[Path, str]]:
+    month_dir = _month_dir(download_root, comp)
+    pdfs = _list_pdfs(month_dir)
+    if not pdfs:
+        print(f"Nenhum PDF encontrado em {month_dir}")
+        return []
+
+    print(f"Enviando {len(pdfs)} arquivo(s) de {comp.ym} para {UPLOAD_URL}...")
+    results = asyncio.run(_upload_many(pdfs))
+
+    ok = [(p, u) for p, u in results if u]
+    out_json = [{"filename": p.name, "path": str(p), "url": u} for p, u in ok]
+    (month_dir / "uploads.json").write_text(json.dumps(out_json, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print("URLs públicas:")
+    for _, url in ok:
+        print(url)
+    return ok
+
+
 async def _upload_one(client: httpx.AsyncClient, path: Path, retries: int = 3) -> tuple[Path, str | None]:
     data = {"file": (path.name, path.read_bytes(), "application/pdf")}
     attempt = 0

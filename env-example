@@ -1,9 +1,16 @@
+# database
+POSTGRES_USER=autselenium
+POSTGRES_PASSWORD=autselenium
+POSTGRES_DB=automacaoselenium
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+
+# Selenium / scraping
+SELENIUM_PLATFORM=linux/amd64
 SELENIUM_IMAGE=seleniarm/standalone-chromium:latest
-# SELENIUM_PLATFORM=linux/amd64  ---- Caso seu computador nao seja mac desabilite
 SELENIUM_REMOTE_URL=http://selenium:4444/wd/hub
-
-UPLOAD_ENDPOINT=https://0x0.st
-
-DOWNLOAD_DIR=data/dom
-
+DOWNLOAD_DIR=/data/dom
 CHROME_HEADLESS=true
+
+# Uploader
+UPLOAD_ENDPOINT=https://0x0.st
