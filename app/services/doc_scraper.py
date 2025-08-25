@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import re
 from pathlib import Path
 from typing import Iterable
@@ -11,6 +12,7 @@ from selenium.common.exceptions import (
     ElementClickInterceptedException,
     NoSuchElementException,
 )
+from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver import ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -34,6 +36,8 @@ def _dbg(msg: str, *args) -> None:
 BASE_URL = "https://www.natal.rn.gov.br/dom"
 PDF_RE = re.compile(r"/storage/app/media/DOM/.+/(dom_(\d{8})[^/]*\.pdf)$", re.IGNORECASE)
 TOTAL_RE = re.compile(r"de\s+(\d+)\s+registros", re.I)
+_DATE_IN_NAME = re.compile(r"dom_(\d{4})(\d{2})(\d{2})", re.IGNORECASE)
+
 
 def _target_competencia() -> Competencia:
     y = os.getenv("TARGET_YEAR")
@@ -41,6 +45,7 @@ def _target_competencia() -> Competencia:
     if y and m:
         return Competencia(year=int(y), month=int(m))
     return previous_month()
+
 
 def _build_driver() -> WebDriver:
     opts = ChromeOptions()
@@ -55,12 +60,14 @@ def _build_driver() -> WebDriver:
     _dbg("Usando Chrome local via Selenium Manager")
     return webdriver.Chrome(options=opts)
 
+
 def _first_row_href(driver: WebDriver) -> str:
     try:
         a = driver.find_element(By.CSS_SELECTOR, "#example tbody tr:first-child a[href$='.pdf']")
         return (a.get_attribute("href") or "").strip()
     except NoSuchElementException:
         return ""
+
 
 def _active_page_number(driver: WebDriver) -> int | None:
     try:
@@ -70,13 +77,39 @@ def _active_page_number(driver: WebDriver) -> int | None:
     except NoSuchElementException:
         return None
 
-def _paginate_texts(driver: WebDriver) -> list[str]:
+
+def _is_link_of_competencia(href: str, comp) -> bool:
+    h = (href or "").lower()
+    m = _DATE_IN_NAME.search(h)
+    if m:
+        y, mm, _dd = m.groups()
+        try:
+            return int(y) == int(comp.year) and int(mm) == int(comp.month)
+        except Exception:
+            return False
+    ym = f"{int(comp.year):04d}{int(comp.month):02d}"
+    return ym in h
+
+
+def _safe_text(el) -> str:
+    try:
+        t = el.text
+        if not t:
+            t = el.get_attribute("textContent") or ""
+        return t.strip()
+    except StaleElementReferenceException:
+        return ""
+
+
+def _paginate_texts(driver) -> list[str]:
     texts: list[str] = []
-    for a in driver.find_elements(By.CSS_SELECTOR, "#example_paginate a"):
-        t = (a.text or "").strip()
-        if t:
-            texts.append(t)
+    anchors = driver.find_elements(By.CSS_SELECTOR, "#example_paginate a.page-link, #example_paginate a")
+    for a in anchors:
+        txt = _safe_text(a)
+        if txt:
+            texts.append(txt)
     return texts
+
 
 def _example_info_text(driver: WebDriver) -> str:
     try:
@@ -84,31 +117,49 @@ def _example_info_text(driver: WebDriver) -> str:
     except NoSuchElementException:
         return ""
 
+
 def _rows_count(driver: WebDriver) -> int:
     return len(driver.find_elements(By.CSS_SELECTOR, "#example tbody tr"))
 
+
 def _dump_state(driver: WebDriver, label: str) -> None:
-    info = _example_info_text(driver)
-    rows = _rows_count(driver)
-    page = _active_page_number(driver)
-    first = _first_row_href(driver)
-    pags = _paginate_texts(driver)
-    _dbg("[%s] info='%s'", label, info)
-    _dbg("[%s] page=%s rows=%s first_href=%s", label, page, rows, first or "(vazio)")
-    _dbg("[%s] paginate buttons=%s", label, pags or ["(nenhum)"])
-    if DEBUG:
-        png = DEBUG_DIR / f"{label}.png"
-        html = DEBUG_DIR / f"{label}.html"
+    if not os.getenv("DEBUG"):
+        return
+    try:
+        outdir = settings.DOWNLOAD_DIR / "debug"
+        outdir.mkdir(parents=True, exist_ok=True)
+
+        (outdir / f"{label}.html").write_text(driver.page_source, encoding="utf-8")
+
         try:
-            driver.save_screenshot(str(png))
-            _dbg("[%s] screenshot salvo em %s", label, png)
-        except Exception as e:
-            _dbg("[%s] erro screenshot: %s", label, e)
+            driver.save_screenshot(str(outdir / f"{label}.png"))
+        except Exception:
+            pass
+
         try:
-            html.write_text(driver.page_source, encoding="utf-8")
-            _dbg("[%s] html salvo em %s", label, html)
-        except Exception as e:
-            _dbg("[%s] erro salvando html: %s", label, e)
+            info = driver.execute_script(
+                "const e=document.querySelector('#example_info');"
+                "return e? e.textContent.trim() : '';"
+            ) or ""
+        except Exception:
+            info = ""
+
+        try:
+            pages = driver.execute_script(
+                "return Array.from(document.querySelectorAll('#example_paginate a'))"
+                ".map(a => (a.textContent||'').trim()).filter(Boolean);"
+            ) or []
+        except Exception:
+            pages = []
+
+        (outdir / f"{label}.txt").write_text(
+            f"DataTables info: {info or '<vazio>'}\n"
+            f"Paginação: {', '.join(pages) if pages else '<vazia>'}\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
 
 def _submit_form_month_year(driver: WebDriver, comp: Competencia) -> None:
     driver.get(BASE_URL)
@@ -126,6 +177,7 @@ def _submit_form_month_year(driver: WebDriver, comp: Competencia) -> None:
     _dump_state(driver, "após-submit")
     _set_datatables_length_100(driver)
     _dump_state(driver, "após-length-100")
+
 
 def _set_datatables_length_100(driver: WebDriver) -> None:
     wait = WebDriverWait(driver, 30)
@@ -150,6 +202,7 @@ def _set_datatables_length_100(driver: WebDriver) -> None:
          driver.find_element(By.CSS_SELECTOR, "select[name='example_length']").get_attribute("value"),
          _first_row_href(driver) or "(vazio)")
 
+
 def _wait_processing_done(driver: WebDriver) -> None:
     try:
         processing = driver.find_element(By.ID, "example_processing")
@@ -157,46 +210,61 @@ def _wait_processing_done(driver: WebDriver) -> None:
         return
     WebDriverWait(driver, 15).until(EC.invisibility_of_element(processing))
 
+
 def _has_next_page(driver: WebDriver) -> bool:
-    try:
-        li_next = driver.find_element(By.CSS_SELECTOR, "#example_paginate li.next")
-        classes = li_next.get_attribute("class") or ""
-        return "disabled" not in classes
-    except NoSuchElementException:
-        for a in driver.find_elements(By.CSS_SELECTOR, "#example_paginate a"):
-            label = (a.text or "").strip().lower()
-            if label in {"próximo", "proximo", "next", "»"}:
-                parent = a.find_element(By.XPATH, "./..")
-                classes = parent.get_attribute("class") or ""
-                return "disabled" not in classes
+    if not driver.find_elements(By.ID, "example_paginate"):
         return False
+
+    li_next = driver.find_elements(By.CSS_SELECTOR, "#example_paginate li.next")
+    if li_next:
+        classes = li_next[0].get_attribute("class") or ""
+        has_link = bool(li_next[0].find_elements(By.TAG_NAME, "a"))
+        return has_link and "disabled" not in classes
+
+    for _ in range(3):
+        try:
+            for a in driver.find_elements(By.CSS_SELECTOR, "#example_paginate a"):
+                label = ((a.text or a.get_attribute("textContent") or "")).strip().lower()
+                if label in {"próximo", "proximo", "next", "»"}:
+                    parent = a.find_element(By.XPATH, "./..")
+                    classes = parent.get_attribute("class") or ""
+                    return "disabled" not in classes
+            return False
+        except StaleElementReferenceException:
+            time.sleep(0.2)
+            continue
+    return False
+
 
 def _click_next_page(driver: WebDriver) -> bool:
     prev_first = _first_row_href(driver)
     prev_active = _active_page_number(driver)
-    try:
-        li_next = driver.find_element(By.CSS_SELECTOR, "#example_paginate li.next")
-        if "disabled" in (li_next.get_attribute("class") or ""):
-            return False
-        a = li_next.find_element(By.TAG_NAME, "a")
-    except NoSuchElementException:
-        a = None
+
+    a = None
+    li_next = driver.find_elements(By.CSS_SELECTOR, "#example_paginate li.next")
+    if li_next and "disabled" not in (li_next[0].get_attribute("class") or ""):
+        links = li_next[0].find_elements(By.TAG_NAME, "a")
+        a = links[0] if links else None
+    if a is None:
         for cand in driver.find_elements(By.CSS_SELECTOR, "#example_paginate a"):
-            label = (cand.text or "").strip().lower()
+            label = (cand.text or cand.get_attribute("textContent") or "").strip().lower()
             if label in {"próximo", "proximo", "next", "»"}:
                 a = cand
                 break
-        if a is None:
-            return False
+    if a is None:
+        return False
+
     try:
         a.click()
     except ElementClickInterceptedException:
         driver.execute_script("arguments[0].click();", a)
+
     _wait_processing_done(driver)
     WebDriverWait(driver, 20).until(
         lambda d: _first_row_href(d) != prev_first or _active_page_number(d) != prev_active
     )
     return True
+
 
 def _click_page_number(driver: WebDriver, page_num: int) -> bool:
     candidates = driver.find_elements(By.CSS_SELECTOR, "#example_paginate a.page-link")
@@ -222,23 +290,28 @@ def _click_page_number(driver: WebDriver, page_num: int) -> bool:
     )
     return True
 
-def _collect_current_page_pdf_links(driver: WebDriver, comp: Competencia) -> list[str]:
-    anchors = driver.find_elements(By.CSS_SELECTOR, "#example tbody a[href$='.pdf']")
-    all_on_page: list[str] = [(a.get_attribute("href") or "").strip() for a in anchors if (a.get_attribute("href") or "").strip()]
-    _dbg("[coleta] anchors na página atual: %s", len(all_on_page))
-    for sample in all_on_page[:3]:
-        _dbg("[coleta] exemplo href: %s", sample)
-    prefix = f"{comp.year:04d}{comp.month:02d}"
-    filtered: list[str] = []
-    for href in all_on_page:
-        m = PDF_RE.search(href)
-        if not m:
-            continue
-        date_part = m.group(2)
-        if date_part.startswith(prefix):
-            filtered.append(href)
-    _dbg("[coleta] filtrados por %s*: %s", prefix, len(filtered))
-    return _dedup(filtered)
+
+def _collect_current_page_pdf_links(driver: WebDriver, comp) -> list[str]:
+    try:
+        urls: list[str] = driver.execute_script("""
+            return Array.from(
+                document.querySelectorAll('#example tbody a[href$=".pdf"]')
+            ).map(a => a.href || '').filter(Boolean);
+        """)
+    except Exception:
+        anchors = driver.find_elements(By.CSS_SELECTOR, "#example tbody a[href$='.pdf']")
+        urls = []
+        for a in anchors:
+            try:
+                href = (a.get_attribute("href") or "").strip()
+                if href:
+                    urls.append(href)
+            except Exception:
+                pass
+
+    urls = [u for u in urls if _is_link_of_competencia(u, comp)]
+    return urls
+
 
 def _log_total_info(driver: WebDriver) -> None:
     try:
@@ -250,6 +323,7 @@ def _log_total_info(driver: WebDriver) -> None:
             LOGGER.info("Info DataTables: %s", info)
     except NoSuchElementException:
         pass
+
 
 def _collect_all_pages_pdf_links(driver: WebDriver, comp: Competencia) -> list[str]:
     wait = WebDriverWait(driver, 20)
@@ -289,6 +363,7 @@ def _collect_all_pages_pdf_links(driver: WebDriver, comp: Competencia) -> list[s
     LOGGER.info("Total acumulado (dedup): %s", len(dedup))
     return dedup
 
+
 def _dedup(urls: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -322,6 +397,7 @@ async def _download_all(urls: Iterable[str], out_dir: Path) -> list[Path]:
     async with httpx.AsyncClient(follow_redirects=True) as client:
         results = await asyncio.gather(*[_download_one(client, u, out_dir) for u in urls])
     return [p for p in results if p is not None]
+
 
 def scrape_previous_month(download_root: Path | None = None) -> list[Path]:
     comp = _target_competencia()
