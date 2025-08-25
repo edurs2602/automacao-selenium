@@ -40,6 +40,10 @@ Certifique-se de que o [Docker](https://www.docker.com/) e o [Docker Compose](ht
     ```env
     SELENIUM_REMOTE_URL=http://selenium:4444/wd/hub
     ```
+4. Crie um diretorio na raiz do projeto chamada data e dentro dele crie um chamado dom
+    ```bash
+    mkdir data/dom
+    ```
 
 ### Iniciar os Serviços
 
@@ -50,6 +54,12 @@ docker-compose up -d --build
 ```
 
 O comando `--build` garantirá que as imagens dos containers sejam construídas a partir do código mais recente. O flag `-d` executa os containers em segundo plano.
+
+Agora com os serviços funcionando, de o seguinte comando em outra instancia do terminial para fazer que o selenium rode o scraper
+
+```bash
+docker compose run --rm app
+```
 
 ## Uso da API
 
